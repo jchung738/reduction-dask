@@ -5,6 +5,7 @@ from metrics import spearman_rank
 from metrics import quartic_error
 from utils import timer
 from utils import kfold_era
+from utils import fit_predict
 import ast
 import re
 import shap
@@ -175,15 +176,6 @@ def mean_decrease_accuracy_tune(model, train_x, train_y, eras, feat_score, num_f
     Each subset of features is tested using kfold_era CV.
     """
 
-    # A helper function that is used when submitting jobs to the Dask Cluster. Fits then scores the model on the
-    # cluster.
-    def fit_predict(model, x_train, y_train, x_test, y_test, eras):
-        model.fit(x_train, y_train)
-        pred = model.predict(x_test)
-        s = spearman_rank(y_test, pred, eras)
-        qme = quartic_error(y_test, pred)
-        return s, qme
-
     models = []
     num_workers = len(workers)
     # Get indices for cross-validation
@@ -319,12 +311,6 @@ def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components
 
     # A helper function that is used when submitting jobs to the Dask Cluster. Fits then scores the model on the
     # cluster.
-    def fit_predict(model, x_train, y_train, x_test, y_test, eras):
-        model.fit(x_train, y_train)
-        pred = model.predict(x_test)
-        s = spearman_rank(y_test, pred, eras)
-        qme = quartic_error(y_test, pred)
-        return s, qme
 
     models = []
     num_workers = len(workers)
@@ -390,7 +376,7 @@ def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components
     return results.sort_values('Spearman Rank Correlation', ascending=False)
 
 
-def mean_decrease_accuracy_selector(train_x, feat_score, n_components, is_clustered=False):
+def shap_selector(train_x, feat_score, n_components, is_clustered=False):
     """
      Inputs: train_x (2d array) The X matrix for training the model
              feat_score (DataFrame) A DataFrame that contains each feature cluster with their corresponding MDA score (given from shapley_values)

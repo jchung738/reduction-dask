@@ -6,7 +6,7 @@ from dask import delayed, compute
 from numpy import loadtxt
 import lhsmdu
 from sklearn.model_selection import ParameterGrid
-
+from metrics import spearman_rank,quartic_error
 import datetime
 
 
@@ -91,6 +91,15 @@ def timer(futures):
         time.sleep(5)
     return
 
+def fit_predict(model, x_train, y_train, x_test, y_test, eras):
+    """A helper function used in for submitting tasks to the cluster to fit, predict, and score the given model. Returns
+    the Spearman Rank Correlation and Quartic Mean Error."""
+
+    model.fit(x_train, y_train)
+    pred = model.predict(x_test)
+    s = spearman_rank(y_test, pred, eras)
+    qme = quartic_error(y_test, pred)
+    return s, qme
 
 def LHS_RandomizedSearch(num_samples, params):
     """

@@ -8,9 +8,11 @@ import scipy.cluster.hierarchy as hac
 from sklearn.metrics import silhouette_samples
 import hdbscan
 from sklearn.cluster import AgglomerativeClustering
-from ace import model # https://pypi.org/project/ace/
+from ace import model  # https://pypi.org/project/ace/
 from scipy.spatial.distance import pdist
 import os, sys
+import scipy.stats as ss
+
 
 def pairwise(x, dist_fn, client):
     """
@@ -39,8 +41,7 @@ def pairwise(x, dist_fn, client):
     return dm
 
 
-def get_optimal_clusters(distance_matrix,  type):
-
+def get_optimal_clusters(distance_matrix, type):
     """
     Input: distance_matrix (2d numpy array) A 2-d distance matrix of the features of the X dataset
            type (string) The type of clustering to be used (singlelink: Single-linkage Agglomerative Clustering,
@@ -71,7 +72,7 @@ def get_optimal_clusters(distance_matrix,  type):
         distOpt = aClust_t_score_vals.iloc[aClust_t_score_vals['Silhouette Score'].idxmax(), 1]
 
         clusters = AgglomerativeClustering(n_clusters=None, affinity='precomputed', linkage='single',
-                                         distance_threshold=distOpt)
+                                           distance_threshold=distOpt)
         clustLabels = clusters.fit_predict(square_matrix)
         names = range(distance_matrix.shape[0])
         clustNames = zip(clustLabels, names)
@@ -151,6 +152,7 @@ def varInfo(x, y, norm=False):
         vXY /= hXY  # normalized variation of information
     return vXY
 
+
 class HiddenPrints:
     def __enter__(self):
         self._original_stdout = sys.stdout
@@ -159,16 +161,18 @@ class HiddenPrints:
     def __exit__(self, exc_type, exc_val, exc_tb):
         sys.stdout.close()
         sys.stdout = self._original_stdout
-def max_correlation(x,y):
+
+
+def max_correlation(x, y):
     """
     Computes the Maximum Correlation distance matrix used for feature clustering.
     """
-  #Credit goes to https://mlfinlab.readthedocs.io/en/latest/implementations/codependence.html
+    # Credit goes to https://mlfinlab.readthedocs.io/en/latest/implementations/codependence.html
     with HiddenPrints():
-        ace_model=model.Model()
+        ace_model = model.Model()
 
-        ace_model.build_model_from_xy([x],y)
-        val = 1-np.corrcoef(ace_model.ace.x_transforms[0], ace_model.ace.y_transform)[0][1]
+        ace_model.build_model_from_xy([x], y)
+        val = 1 - np.corrcoef(ace_model.ace.x_transforms[0], ace_model.ace.y_transform)[0][1]
     return val
 
 
@@ -209,8 +213,3 @@ def distcorr(Xval, Yval, pval=False, nruns=500):
     else:
 
         return 1 - dcor
-
-
-
-
-

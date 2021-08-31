@@ -6,9 +6,9 @@ from dask import delayed, compute
 from numpy import loadtxt
 import lhsmdu
 from sklearn.model_selection import ParameterGrid
-from metrics import spearman_rank,quartic_error
+from metrics import spearman_rank, quartic_error
 import datetime
-
+import time
 
 # Submissions are scored by spearman correlation
 # These are functions used in different parallel functions and hypeparameter tuning.
@@ -91,6 +91,7 @@ def timer(futures):
         time.sleep(5)
     return
 
+
 def fit_predict(model, x_train, y_train, x_test, y_test, eras):
     """A helper function used in for submitting tasks to the cluster to fit, predict, and score the given model. Returns
     the Spearman Rank Correlation and Quartic Mean Error."""
@@ -100,6 +101,7 @@ def fit_predict(model, x_train, y_train, x_test, y_test, eras):
     s = spearman_rank(y_test, pred, eras)
     qme = quartic_error(y_test, pred)
     return s, qme
+
 
 def LHS_RandomizedSearch(num_samples, params):
     """
@@ -142,3 +144,41 @@ def LHS_RandomizedSearch(num_samples, params):
             j += 1
         parameters.append(ph)
     return parameters
+
+
+def transform_dask(redux, train_x, num_fit_rows, num_splits, client, workers):
+    """
+     Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
+            train_x (2d array) The X matrix for training the model
+            num_fit_rows (int) Number of rows used to fit the redux object
+            num_splits (int) Number of times the data is split up to be transformed (smaller values lead to more
+                             accurate transformations)
+            client (Dask object) Used to submit jobs to the remote cluster
+            workers (list) List of worker ids given by the Dask cluster
+
+    Outputs: new_train_x (2d array) The transformed train_x dataset from the redux transform function.
+
+    This function tunes the dimensionality reduction technique (redux) by first fitting the function
+    with a subset of the training data then transforms the entire dataset by splitting the dataset by num_splits,
+    transforming each split in parallel using Dask. Use this function when runtime becomes too long for transforming
+    the dataset.
+    """
+    train_subset = train_x[:num_fit_rows]
+    redux.fit(train_subset)
+    train_splits = len(train_x) // num_splits
+    new_train_x = []
+    num_workers = len(workers)
+    for i in range(num_splits):
+        if i == num_splits - 1:
+            t_x = client.scatter(train_x[i * train_splits:], direct=True, workers=workers[i % 30])
+            new_train_x.append(client.submit(redux.transform, t_x, workers=workers[i % num_workers]))
+
+        else:
+            t_x = client.scatter(train_x[i * train_splits:(i + 1) * train_splits], direct=True,
+                                 workers=workers[i % num_workers])
+            new_train_x.append(client.submit(redux.transform, t_x, workers=workers[i % num_workers]))
+
+
+    new_train_x = client.gather(new_train_x, direct=True)
+
+    return new_train_x

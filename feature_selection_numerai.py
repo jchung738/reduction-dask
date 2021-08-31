@@ -2,7 +2,6 @@
 import pandas as pd
 import numpy as np
 from metrics import spearman_rank
-from metrics import quartic_error
 from utils import timer
 from utils import kfold_era
 from utils import fit_predict

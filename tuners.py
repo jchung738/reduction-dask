@@ -144,7 +144,7 @@ def kfold_dask(train_x, train_y, eras, num_folds, client, model, workers):
     return spear, quart
 
 
-def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,  num_samples, client, workers):
+def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, client, workers):
     """
     Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             model (sklearn Model Object) Any kind of sklearn model
@@ -220,7 +220,8 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
     return final.sort_values(ascending=False)
 
 
-def tune_reduction_transform_dask(redux, model, train_x, train_y, eras,num_folds, params, num_samples,num_fit_rows,num_splits, client, workers):
+def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, num_fit_rows,
+                                  num_splits, client, workers):
     """
     Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             model (sklearn Model Object) Any kind of sklearn model
@@ -231,6 +232,9 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras,num_folds
             params (dict) A dictionary containing different hyperparamers of the redux function as keys and
                           ranges of potential hyperparameter values used as values
             num_samples (int) Total number of hyperparameter combinations to search through
+            num_fit_rows (int) Number of rows used to fit the redux object
+            num_splits (int) Number of times the data is split up to be transformed (smaller values lead to more
+                             accurate transformations)
             client (Dask object) Used to submit jobs to the remote cluster
             workers (list) List of worker ids given by the Dask cluster
 
@@ -262,21 +266,20 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras,num_folds
 
     def fit_transform(reduction, x_train):
         try:
-            redux = reduction.fit(x_train[:4779])
+            redux = reduction.fit(x_train[:num_fit_rows])
         except (ValueError, TypeError):
             return
-        train_splits = len(x_train) // 10
-        for i in range(10):
+        train_splits = len(x_train) // num_splits
+        for i in range(num_splits):
             if i == 0:
                 train_x = redux.transform(x_train[:train_splits])
-            elif i < 9:
+            elif i < num_splits - 1:
                 train_x = np.append(train_x, redux.transform(x_train[train_splits * i:train_splits * (i + 1)]), axis=0)
             else:
 
                 train_x = np.append(train_x, redux.transform(x_train[train_splits * i:]), axis=0)
 
         return train_x
-
 
     for values in parameters:
         rf = redux(**values)
@@ -330,19 +333,20 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras,num_folds
     return final
 
 
-def hyperband(model, train_x, train_y, eras, client, params, samples, eta, max_ratio, num_workers):
+def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, max_ratio, client, workers):
     """
     Inputs: model (sklearn Model Object) Any kind of sklearn model
             train_x (2d array) The X matrix for training the model
             train_y (1d array) The y array for training the model
             eras (1d array) The eras array which provide indices and eras for each row of the training data
-            client (Dask object) Used to submit jobs to the remote cluster
+            num_folds (int) Number of folds for cross-validation
             params (dict) A dictionary containing different hyperparamers of the model as keys and ranges of
             potential hyperparameter values used as values
             samples (int) Total number of hyperparameter combinations to search through
             eta (float) Downsampling rate used for successive halving
             max_ratio (int) The maximum ratio of data to be used in training of models
-            num_workers (int) Number of workers used to run in the remote cluster
+            client (Dask object) Used to submit jobs to the remote cluster
+            workers (list) List of worker ids given by the Dask cluster
 
     Outputs: best_score (float) Spearman Rank Correlation of the top performing hyperparameter combination
              best_param (dict) Best performing hyperparameters
@@ -351,16 +355,11 @@ def hyperband(model, train_x, train_y, eras, client, params, samples, eta, max_r
     for each round of successive halving.
     """
 
-    k_folds = 5
-
-    val = pd.DataFrame()
-    scores = pd.DataFrame()
-
+    num_workers = len(workers)
     parameters = LHS_RandomizedSearch(samples, params)
-    i = 0
     w = 0
-    h = num_workers // k_folds
-    kftrain, kftest = kfold_era(5, eras)
+    h = num_workers // num_folds
+    kftrain, kftest = kfold_era(num_folds, eras)
     test_indices = []
     train_indices = []
     x_s = []
@@ -381,8 +380,6 @@ def hyperband(model, train_x, train_y, eras, client, params, samples, eta, max_r
         test_indices.append(test_idx)
         train_indices.append(train_idx)
     print('Done Scattering')
-    w = 0
-    k = 0
 
     def score(Y_True, Y_Pred, era):
         """
@@ -407,10 +404,8 @@ def hyperband(model, train_x, train_y, eras, client, params, samples, eta, max_r
 
     best_score = -1e8
     best_param = 0
-    scores = []
-    params = []
+
     counter = 0
-    best_counter = 0
     log_eta = lambda x: np.log(x) / np.log(eta)
     s_max = int(log_eta(max_ratio))
     B = (s_max + 1) * max_ratio
@@ -438,15 +433,13 @@ def hyperband(model, train_x, train_y, eras, client, params, samples, eta, max_r
 
             print("\n*** {} configurations x {:.1f} ratio".format(n_configs, ratio))
 
-            val_losses = []
-            early_stops = []
             models = []
 
             for t in T:
 
                 rf = model(**t)
 
-                for f in range(k_folds):
+                for f in range(num_folds):
                     future = client.submit(fit_predict, rf, x_s[f], y_s[f], x_t[f], y_t[f], e_t[f], ratio,
                                            workers=workers[int(k % num_workers)].tolist())
                     models.append(future)

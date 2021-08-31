@@ -4,7 +4,7 @@ import numpy as np
 from metrics import spearman_rank
 from utils import timer
 from utils import kfold_era
-from utils import fit_predict
+from metrics import fit_predict
 import ast
 import re
 import shap

@@ -12,7 +12,7 @@ def spearman_rank(y_true, y_pred, era):
     Takes in y and y_hat, ranks said values within each corresponding era, then finds the rank correlation between each era.
     """
     # Use index of y_true to form y_pred as DataFrame
-    y_pred = pd.DataFrame(y_pred, index=Y_True.index)
+    y_pred = pd.DataFrame(y_pred, index=y_true.index)
     # Join y_pred with the era Series using indices
     y_pred = y_pred.join(era).dropna()
     # Percentile rank each era
@@ -31,3 +31,12 @@ def quartic_error(y_true, y_pred):
     This function finds the mean error to the fourth power to increase the influence of extreme errors, which is important for financial markets.
     """
     return np.mean((y_true - y_pred) ** 4)
+def fit_predict(model, x_train, y_train, x_test, y_test, eras):
+    """A helper function used in for submitting tasks to the cluster to fit, predict, and score the given model. Returns
+    the Spearman Rank Correlation and Quartic Mean Error."""
+
+    model.fit(x_train, y_train)
+    pred = model.predict(x_test)
+    s = spearman_rank(y_test, pred, eras)
+    qme = quartic_error(y_test, pred)
+    return s, qme

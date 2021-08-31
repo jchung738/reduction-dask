@@ -4,7 +4,7 @@ from metrics import spearman_rank
 from utils import timer
 from utils import kfold_era
 from utils import LHS_RandomizedSearch
-from utils import fit_predict
+from metrics import fit_predict
 import scipy.stats as st
 
 

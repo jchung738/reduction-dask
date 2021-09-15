@@ -375,12 +375,11 @@ def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components
     return results.sort_values('Spearman Rank Correlation', ascending=False)
 
 
-def shap_selector(train_x, feat_score, n_components, is_clustered=False):
+def shap_selector(train_x, feat_score, n_components):
     """
      Inputs: train_x (2d array) The X matrix for training the model
              feat_score (DataFrame) A DataFrame that contains each feature cluster with their corresponding MDA score (given from shapley_values)
              n_components (int) The number of feature clusters to be returned as the reduced X dataset
-             is_clustered (boolean) Whether or not the feat_score uses single features (False) or feature clusters (True)
 
      Output: SHAP_train_x (2d array) The X matrix after SHAP feature selection
 

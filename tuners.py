@@ -8,7 +8,7 @@ from metrics import fit_predict
 import scipy.stats as st
 
 
-def tune_dask_kfold(model, train_x, train_y, eras, num_folds, params, num_samples, client, workers):
+def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_samples, client, workers):
     """
     Inputs: model (sklearn Model Object) Any kind of sklearn model
             train_x (2d array) The X matrix for training the model
@@ -92,17 +92,17 @@ def tune_dask_kfold(model, train_x, train_y, eras, num_folds, params, num_sample
     qmes = np.mean(qmes, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': scores, 'Quartic Mean Error': qmes})
     final = pd.concat([val, s], axis=1)
-    return final.sort_values(ascending=False)
+    return final.sort_values(by='Spearman Rank Corr by ERA Mean',ascending=False)
 
 
-def kfold_dask(train_x, train_y, eras, num_folds, client, model, workers):
+def kfold_dask(model,train_x, train_y, eras, num_folds, client,  workers):
     """
-    Inputs: train_x (2d array) The X matrix for training the model
+    Inputs: model (sklearn Model Object) Any kind of sklearn model
+            train_x (2d array) The X matrix for training the model
             train_y (1d array) The y array for training the model
             eras (1d array) The eras array which provide indices and eras for each row of the training data
             num_folds (int) Number of folds for cross-validation
             client (Dask object) Used to submit jobs to the remote cluster
-            model (sklearn Model Object) Any kind of sklearn model
             workers (list) List of worker ids given by the Dask cluster
 
     Outputs: spear (tuple) A tuple containing the mean, 2.5% and 97.5% confidence intervals of the
@@ -216,7 +216,7 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
     rf_means = np.mean(models, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': rf_means})
     final = pd.concat([val, s], axis=1)
-    return final.sort_values(ascending=False)
+    return final.sort_values(by='Spearman Rank Corr by ERA Mean',ascending=False)
 
 
 def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, num_fit_rows,
@@ -329,7 +329,7 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
     rf_means = np.mean(models, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': rf_means})
     final = pd.concat([val, s], axis=1)
-    return final
+    return final.sort_values('Spearman Rank Corr by ERA Mean',ascending=False)
 
 
 def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, max_ratio, client, workers):

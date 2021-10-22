@@ -8,7 +8,7 @@ from metrics import fit_predict
 import scipy.stats as st
 
 
-def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_samples, client, workers):
+def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_samples, client):
     """
     Inputs: model (sklearn Model Object) Any kind of sklearn model
             train_x (2d array) The X matrix for training the model
@@ -19,7 +19,6 @@ def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_sample
             potential hyper-parameter values used as values
             num_samples (int) number of samples to search for hyper-parameter tuning
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
 
 
     Output: final (DataFrame) A DataFrame of the hyper-parameter combinations tested ranked by their Spearman Rank Correlation
@@ -31,6 +30,8 @@ def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_sample
     """
 
     val = pd.DataFrame()
+    workers = np.array(list(client.get_worker_logs().keys()))
+
     num_workers = len(workers)
     parameters = LHS_RandomizedSearch(num_samples, params)
     i = 0
@@ -92,10 +93,10 @@ def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_sample
     qmes = np.mean(qmes, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': scores, 'Quartic Mean Error': qmes})
     final = pd.concat([val, s], axis=1)
-    return final.sort_values(by='Spearman Rank Corr by ERA Mean',ascending=False)
+    return final.sort_values(by='Spearman Rank Corr by ERA Mean', ascending=False)
 
 
-def kfold_dask(model,train_x, train_y, eras, num_folds, client,  workers):
+def kfold_dask(model, train_x, train_y, eras, num_folds, client):
     """
     Inputs: model (sklearn Model Object) Any kind of sklearn model
             train_x (2d array) The X matrix for training the model
@@ -103,7 +104,6 @@ def kfold_dask(model,train_x, train_y, eras, num_folds, client,  workers):
             eras (1d array) The eras array which provide indices and eras for each row of the training data
             num_folds (int) Number of folds for cross-validation
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
 
     Outputs: spear (tuple) A tuple containing the mean, 2.5% and 97.5% confidence intervals of the
                            Spearman Rank Correlation
@@ -113,6 +113,8 @@ def kfold_dask(model,train_x, train_y, eras, num_folds, client,  workers):
     Spearman rank correlation and Quartic mean error.
     """
     train, test = kfold_era(num_folds, eras)
+    workers = np.array(list(client.get_worker_logs().keys()))
+
     models = []
     test_indices = []
     i = 0
@@ -138,12 +140,12 @@ def kfold_dask(model,train_x, train_y, eras, num_folds, client,  workers):
     scores = client.gather(models, direct=True)
     s = [x[0] for x in scores]
     q = [x[1] for x in scores]
-    spear = (np.mean(s), (min(s),max(s)))
-    quart = (np.mean(q),  (min(q),max(q)))
+    spear = (np.mean(s), (min(s), max(s)))
+    quart = (np.mean(q), (min(q), max(q)))
     return spear, quart
 
 
-def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, client, workers):
+def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, client):
     """
     Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             model (sklearn Model Object) Any kind of sklearn model
@@ -155,7 +157,6 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
             ranges of potential hyperparameter values used as values
             num_samples (int) Total number of hyperparameter combinations to search through
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
 
 
     Output: final (DataFrame) A DataFrame of the hyper-parameter combinations tested ranked by their Spearman Rank Correlation
@@ -166,6 +167,8 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
     """
     reductions = []
     val = pd.DataFrame()
+    workers = np.array(list(client.get_worker_logs().keys()))
+
     models = []
     num_workers = len(workers)
     parameters = LHS_RandomizedSearch(num_samples, params)
@@ -216,11 +219,11 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
     rf_means = np.mean(models, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': rf_means})
     final = pd.concat([val, s], axis=1)
-    return final.sort_values(by='Spearman Rank Corr by ERA Mean',ascending=False)
+    return final.sort_values(by='Spearman Rank Corr by ERA Mean', ascending=False)
 
 
 def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, num_fit_rows,
-                                  num_splits, client, workers):
+                                  num_splits, client):
     """
     Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             model (sklearn Model Object) Any kind of sklearn model
@@ -235,7 +238,6 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
             num_splits (int) Number of times the data is split up to be transformed (smaller values lead to more
                              accurate transformations)
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
 
     Outputs: final (DataFrame) A DataFrame that contains the average CV Spearman Rank Correlation of each set of
              hyperparameters
@@ -248,6 +250,8 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
     reductions = []
     val = pd.DataFrame()
     models = []
+    workers = np.array(list(client.get_worker_logs().keys()))
+
     num_workers = len(workers)
     parameters = LHS_RandomizedSearch(num_samples, params)
     kftrain, kftest = kfold_era(num_folds, eras)
@@ -329,10 +333,10 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
     rf_means = np.mean(models, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': rf_means})
     final = pd.concat([val, s], axis=1)
-    return final.sort_values('Spearman Rank Corr by ERA Mean',ascending=False)
+    return final.sort_values('Spearman Rank Corr by ERA Mean', ascending=False)
 
 
-def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, max_ratio, client, workers):
+def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, max_ratio, client):
     """
     Inputs: model (sklearn Model Object) Any kind of sklearn model
             train_x (2d array) The X matrix for training the model
@@ -345,7 +349,6 @@ def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, ma
             eta (float) Downsampling rate used for successive halving
             max_ratio (int) The maximum ratio of data to be used in training of models
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
 
     Outputs: best_score (float) Spearman Rank Correlation of the top performing hyperparameter combination
              best_param (dict) Best performing hyperparameters
@@ -353,6 +356,7 @@ def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, ma
     Use the hyperband algorithm to hyperparameter tune any model. This version uses Dask to parallelize model training
     for each round of successive halving.
     """
+    workers = np.array(list(client.get_worker_logs().keys()))
 
     num_workers = len(workers)
     parameters = LHS_RandomizedSearch(samples, params)

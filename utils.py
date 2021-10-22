@@ -131,7 +131,7 @@ def LHS_RandomizedSearch(num_samples, params):
     return parameters
 
 
-def transform_dask(redux, train_x, num_fit_rows, num_splits, client, workers):
+def transform_dask(redux, train_x, num_fit_rows, num_splits, client):
     """
      Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             train_x (2d array) The X matrix for training the model
@@ -139,7 +139,7 @@ def transform_dask(redux, train_x, num_fit_rows, num_splits, client, workers):
             num_splits (int) Number of times the data is split up to be transformed (smaller values lead to more
                              accurate transformations)
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
+
 
     Outputs: new_train_x (2d array) The transformed train_x dataset from the redux transform function.
 
@@ -148,6 +148,8 @@ def transform_dask(redux, train_x, num_fit_rows, num_splits, client, workers):
     transforming each split in parallel using Dask. Use this function when runtime becomes too long for transforming
     the dataset.
     """
+    workers = np.array(list(client.get_worker_logs().keys()))
+
     train_subset = train_x[:num_fit_rows]
     redux.fit(train_subset)
     train_splits = len(train_x) // num_splits

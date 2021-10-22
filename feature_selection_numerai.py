@@ -10,7 +10,7 @@ import re
 import shap
 
 
-def mean_decrease_accuracy(model, train_x, train_y, eras, num_folds, client, workers, features=None):
+def mean_decrease_accuracy(model, train_x, train_y, eras, num_folds, client, features=None):
     """
     Inputs: model (Scikit-Learn Model object) The model to be used to rank features
             trainx (2d array) The X matrix for training the model
@@ -18,7 +18,6 @@ def mean_decrease_accuracy(model, train_x, train_y, eras, num_folds, client, wor
             eras (1d array) The eras array which provide indices and eras for each row of the training data
             num_folds (int) Number of folds used for cross-validation of each shuffled feature
             client (Dask object) Used to submit jobs to the remote cluster
-            workers (list) List of worker ids given by the Dask cluster
             features (dict) An optional parameter which can take in a dictionary of clusters of features used in
             feature clustering
     Output: results (DataFrame) A DataFrame that is sorted by the MDA score for each feature or cluster of features
@@ -29,6 +28,7 @@ def mean_decrease_accuracy(model, train_x, train_y, eras, num_folds, client, wor
     training of each shuffled feature (or cluster of features).
     Credit of MDA: Marcos Lopez De Prado, Advances in Financial Machine Learning
     """
+    workers = np.array(list(client.get_worker_logs().keys()))
 
     spearm = dict()
     # Get names of each feature for later
@@ -154,7 +154,7 @@ def mean_decrease_accuracy(model, train_x, train_y, eras, num_folds, client, wor
     return results
 
 
-def mean_decrease_accuracy_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components, client, workers,
+def mean_decrease_accuracy_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components, client,
                                 is_clustered=False):
     """
     Inputs: model (Scikit-Learn Model object) The model that is used for the wrapper feature selection
@@ -165,7 +165,6 @@ def mean_decrease_accuracy_tune(model, train_x, train_y, eras, feat_score, num_f
             num_folds (int) Number of folds used for cross-validation of each shuffled feature
             n_components (int) The maximum number of features tried when tuning MDA using forward selection.
             client (Dask object) Used to submit jobs to the remote cluster
-            num_workers (int) Number of workers used to run in the remote cluster
             is_clustered (boolean) Whether or not the feat_score uses single features (False) or feature clusters (True)
 
     Outputs: results (pandas DataFrame) A Dataframe containing the number of clusters tested, the average Spearman rank
@@ -174,6 +173,7 @@ def mean_decrease_accuracy_tune(model, train_x, train_y, eras, feat_score, num_f
     This function finds the optimal number of feature clusters from mean_decrease_accuracy using forward selection.
     Each subset of features is tested using kfold_era CV.
     """
+    workers = np.array(list(client.get_worker_logs().keys()))
 
     models = []
     num_workers = len(workers)
@@ -288,7 +288,7 @@ def shapely_values(model, train_x, train_y):
     return results
 
 
-def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components, client, workers):
+def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components, client):
     """
     Inputs: model (Scikit-Learn Model object) The model that is used for the wrapper feature selection
             train_x (2d array) The X matrix for training the model
@@ -299,7 +299,6 @@ def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components
             num_folds (int) Number of folds used for cross-validation of each shuffled feature
             n_components (int) The maximum number of features tried when tuning MDA using forward selection.
             client (Dask object) Used to submit jobs to the remote cluster
-            num_workers (int) Number of workers used to run in the remote cluster
 
     Outputs: results (pandas DataFrame) A Dataframe containing the number of clusters tested, the average Spearman rank
     correlation and quartic mean error of the CV, sorted by the Spearman Rank Correlation.
@@ -312,6 +311,8 @@ def shap_tune(model, train_x, train_y, eras, feat_score, num_folds, n_components
     # cluster.
 
     models = []
+    workers = np.array(list(client.get_worker_logs().keys()))
+
     num_workers = len(workers)
     # Get indices for cross-validation
     train, test = kfold_era(num_folds, eras)

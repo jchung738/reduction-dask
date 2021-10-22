@@ -138,8 +138,8 @@ def kfold_dask(model,train_x, train_y, eras, num_folds, client,  workers):
     scores = client.gather(models, direct=True)
     s = [x[0] for x in scores]
     q = [x[1] for x in scores]
-    spear = (np.mean(s), st.t.interval(0.95, len(s) - 1, loc=np.mean(s), scale=st.sem(s)))
-    quart = (np.mean(q), st.t.interval(0.95, len(q) - 1, loc=np.mean(q), scale=st.sem(q)))
+    spear = (np.mean(s), (min(s),max(s)))
+    quart = (np.mean(q),  (min(q),max(q)))
     return spear, quart
 
 

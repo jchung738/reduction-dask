@@ -131,7 +131,7 @@ def LHS_RandomizedSearch(num_samples, params):
     return parameters
 
 
-def transform_dask(redux, train_x, num_fit_rows, num_splits, client):
+def fit_transform_dask(redux, train_x, num_fit_rows, num_splits, client):
     """
      Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             train_x (2d array) The X matrix for training the model

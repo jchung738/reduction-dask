@@ -157,7 +157,7 @@ def transform_dask(redux, train_x, num_fit_rows, num_splits, client):
     num_workers = len(workers)
     for i in range(num_splits):
         if i == num_splits - 1:
-            t_x = client.scatter(train_x[i * train_splits:], direct=True, workers=workers[i % 30])
+            t_x = client.scatter(train_x[i * train_splits:], direct=True, workers=workers[i % num_workers])
             new_train_x.append(client.submit(redux.transform, t_x, workers=workers[i % num_workers]))
 
         else:

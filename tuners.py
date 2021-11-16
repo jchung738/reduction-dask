@@ -5,7 +5,6 @@ from utils import timer
 from utils import kfold_era
 from utils import LHS_RandomizedSearch
 from metrics import fit_predict
-import scipy.stats as st
 
 
 def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_samples, client):
@@ -162,8 +161,7 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
     Output: final (DataFrame) A DataFrame of the hyper-parameter combinations tested ranked by their Spearman Rank Correlation
 
 
-    This function performs K-fold cross-validation with respect to eras and returns the mean, 2.5% and 97.5% CI for both
-    Spearman rank correlation and Quartic mean error.
+    This function performs K-fold cross-validation with respect to eras and returns the mean Spearman rank correlation.
     """
     reductions = []
     val = pd.DataFrame()
@@ -175,51 +173,81 @@ def tune_reduction_dask(redux, model, train_x, train_y, eras, num_folds, params,
     kftrain, kftest = kfold_era(num_folds, eras)
 
     i = 0
-    train_x = client.scatter(train_x, broadcast=True)
+
+    # train_x = client.scatter(train_x, broadcast=True)
 
     def fit_predict(model, x_train, y_train, x_test, y_test, eras):
         model.fit(x_train, y_train)
         s = spearman_rank(y_test, model.predict(x_test), eras)
         return s
 
+    def fit_transform(redux, x_train, x_test):
+        train_x = redux.fit_transform(x_train)
+        test_x = redux.transform(x_test)
+        return (train_x, test_x)
+
     # Transform the train_x array with each hyper-parameter combination used for the dimensionality reduction function
+    i = 0
+    k = 0
+    n_samples = 0
+    drop = []
+    y_folds = []
+    era_folds = []
     for values in parameters:
-        rf = redux(**values)
-        fut = client.submit(rf.fit_transform, train_x, workers=workers[i % num_workers].tolist())
-        reductions.append(fut)
+        for train_idx, test_idx in zip(kftrain, kftest):
+            x_train, x_test = train_x[train_idx], train_x[test_idx]
+            y_fold = (train_y[train_idx], train_y[test_idx])
+            e_test = eras.iloc[test_idx]
+            y_folds.append(y_fold)
+            era_folds.append(e_test)
+            rf = redux(**values)
+            fut = client.submit(fit_transform, rf, x_train, x_test, workers=workers[i % num_workers].tolist())
+            reductions.append(fut)
+
         v = pd.DataFrame(values, index=[0])
         val = val.append(v, ignore_index=True)
         i += 1
         if i >= num_samples:
             break
-
     timer(reductions)
-    print('gathered')
     reductions = client.gather(reductions, direct=True)
-
-    # Scatter each fold and submit tasks for each fold to be trained and scored.
     i = 0
+    num_redux = len(reductions)
     for r in reductions:
-        for train_idx, test_idx in zip(kftrain, kftest):
-            x_train, x_test = r[train_idx], r[test_idx]
-            y_train, y_test = train_y[train_idx], train_y[test_idx]
-            e_test = eras.iloc[test_idx]
-            x = client.scatter(x_train, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            y = client.scatter(y_train, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            x_t = client.scatter(x_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            y_t = client.scatter(y_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            e_t = client.scatter(e_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            models.append(
-                client.submit(fit_predict, model, x, y, x_t, y_t, e_t, workers=workers[int(i % num_workers)].tolist()))
-            i += 1
+        if r is None:
+            d_index = i // num_folds
 
+            drop.append(d_index)
+            models.append(0)
+            continue
+
+        y_train, y_test = y_folds[i]
+        e_test = era_folds[i]
+
+        x = r[0]
+        x_test = r[1]
+        y = client.scatter(y_train, workers=workers[int(i % num_workers)].tolist(), direct=True)
+        y_t = client.scatter(y_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
+        e_t = client.scatter(e_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
+        models.append(
+            client.submit(fit_predict, model, x, y, x_test, y_t, e_t, workers=workers[int(i % num_workers)].tolist()))
+        i += 1
+        k += 1
+
+    val = val.drop(drop, axis=0)
+    val.reset_index(inplace=True)
     timer(models)
-    gathered = client.gather(models, direct=True)
-    models = np.split(np.array(gathered), num_samples)
+    gathered = np.array(client.gather(models, direct=True))
+    drop_indices = np.array([])
+    for d in drop:
+        drop_indices = np.append(drop_indices, np.arange(int(d), int(d + num_folds), 1))
+
+    gathered = np.delete(gathered, drop_indices)
+    models = np.split(gathered, len(gathered) / num_folds)
     rf_means = np.mean(models, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': rf_means})
     final = pd.concat([val, s], axis=1)
-    return final.sort_values(by='Spearman Rank Corr by ERA Mean', ascending=False)
+    return final.sort_values('Spearman Rank Corr by ERA Mean', ascending=False)
 
 
 def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_folds, params, num_samples, num_fit_rows,
@@ -257,17 +285,13 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
     kftrain, kftest = kfold_era(num_folds, eras)
 
     i = 0
-    train_x = client.scatter(train_x, broadcast=True)
-
-    if train_y is not None:
-        train_y = client.scatter(train_y, broadcast=True)
 
     def fit_predict(model, x_train, y_train, x_test, y_test, eras):
         model.fit(x_train, y_train)
         s = spearman_rank(y_test, model.predict(x_test), eras)
         return s
 
-    def fit_transform(reduction, x_train):
+    def fit_transform(reduction, x_train, x_test):
         try:
             redux = reduction.fit(x_train[:num_fit_rows])
         except (ValueError, TypeError):
@@ -281,13 +305,25 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
             else:
 
                 train_x = np.append(train_x, redux.transform(x_train[train_splits * i:]), axis=0)
+        test_x = redux.transform(x_test)
+        return train_x, test_x
 
-        return train_x
-
+    i = 0
+    k = 0
+    n_samples = 0
+    drop = []
+    y_folds = []
+    era_folds = []
     for values in parameters:
-        rf = redux(**values)
-        fut = client.submit(fit_transform, rf, train_x, workers=workers[i % num_workers].tolist())
-        reductions.append(fut)
+        for train_idx, test_idx in zip(kftrain, kftest):
+            x_train, x_test = train_x[train_idx], train_x[test_idx]
+            y_fold = (train_y[train_idx], train_y[test_idx])
+            e_test = eras.iloc[test_idx]
+            y_folds.append(y_fold)
+            era_folds.append(e_test)
+            rf = redux(**values)
+            fut = client.submit(fit_transform, rf, x_train, x_test, workers=workers[i % num_workers].tolist())
+            reductions.append(fut)
 
         v = pd.DataFrame(values, index=[0])
         val = val.append(v, ignore_index=True)
@@ -295,41 +331,40 @@ def tune_reduction_transform_dask(redux, model, train_x, train_y, eras, num_fold
         if i >= num_samples:
             break
     timer(reductions)
-    print('gathered')
     reductions = client.gather(reductions, direct=True)
-    train_y = client.gather(train_y)
     i = 0
-    k = 0
-    n_samples = 0
-    drop = []
+    num_redux = len(reductions)
     for r in reductions:
         if r is None:
-            drop.append(k)
-            k += 1
+            d_index = i // num_folds
+
+            drop.append(d_index)
+            models.append(0)
             continue
-        if np.isnan(np.sum(r)):
-            drop.append(k)
-            k += 1
-            continue
-        for train_idx, test_idx in zip(kftrain, kftest):
-            x_train, x_test = r[train_idx], r[test_idx]
-            y_train, y_test = train_y[train_idx], train_y[test_idx]
-            e_test = eras.iloc[test_idx]
-            x = client.scatter(x_train, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            y = client.scatter(y_train, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            x_t = client.scatter(x_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            y_t = client.scatter(y_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            e_t = client.scatter(e_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
-            models.append(
-                client.submit(fit_predict, model, x, y, x_t, y_t, e_t, workers=workers[int(i % num_workers)].tolist()))
-            i += 1
+
+        y_train, y_test = y_folds[i]
+        e_test = era_folds[i]
+
+        x = r[0]
+        x_test = r[1]
+        y = client.scatter(y_train, workers=workers[int(i % num_workers)].tolist(), direct=True)
+        y_t = client.scatter(y_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
+        e_t = client.scatter(e_test, workers=workers[int(i % num_workers)].tolist(), direct=True)
+        models.append(
+            client.submit(fit_predict, model, x, y, x_test, y_t, e_t, workers=workers[int(i % num_workers)].tolist()))
+        i += 1
         k += 1
-        n_samples += 1
+
     val = val.drop(drop, axis=0)
     val.reset_index(inplace=True)
     timer(models)
-    gathered = client.gather(models, direct=True)
-    models = np.split(np.array(gathered), n_samples)
+    gathered = np.array(client.gather(models, direct=True))
+    drop_indices = np.array([])
+    for d in drop:
+        drop_indices = np.append(drop_indices, np.arange(int(d), int(d + num_folds)))
+
+    gathered = np.delete(gathered, drop_indices)
+    models = np.split(gathered, len(gathered) / num_folds)
     rf_means = np.mean(models, axis=1)
     s = pd.DataFrame({'Spearman Rank Corr by ERA Mean': rf_means})
     final = pd.concat([val, s], axis=1)
@@ -460,6 +495,186 @@ def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, ma
                 best_score = score
                 best_param = param
             print("\n{} | current score: {} | best score so far: {:.4f} (parameters {})\n".format(counter, score,
+                                                                                                  best_score,
+                                                                                                  best_param))
+
+            # select a number of best configurations for the next loop
+            # filter out early stops, if any
+            indices = np.argsort(results)
+            T = [T[i] for i in indices]
+            T = T[-int(n_configs / eta):]
+
+    return best_score, best_param
+
+
+def tune_reduction_hyperband(redux, model, train_x, train_y, eras, num_folds, params, num_samples, eta, max_ratio,
+                             num_fit_rows, num_splits, client):
+    """
+    Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
+            model (sklearn Model Object) Any kind of sklearn model
+            train_x (2d array) The X matrix for training the model
+            train_y (1d array) The y array for training the model
+            eras (1d array) The eras array which provide indices and eras for each row of the training data
+            num_folds (int) Number of folds for cross-validation
+            params (dict) A dictionary containing different hyperparamers of the model as keys and ranges of
+            potential hyperparameter values used as values
+            num_samples (int) Total number of hyperparameter combinations to search through
+            eta (float) Downsampling rate used for successive halving
+            max_ratio (int) The maximum ratio of data to be used in training of models
+            num_fit_rows (int) Number of rows used to fit the redux object
+            num_splits (int) Number of times the data is split up to be transformed (smaller values lead to more
+                             accurate transformations)
+            client (Dask object) Used to submit jobs to the remote cluster
+
+    Outputs: best_score (float) Spearman Rank Correlation of the top performing hyperparameter combination
+             best_param (dict) Best performing hyperparameters
+
+    Use the hyperband algorithm to hyperparameter tune any model. This version uses Dask to parallelize model training
+    for each round of successive halving.
+    """
+    workers = np.array(list(client.get_worker_logs().keys()))
+
+    num_workers = len(workers)
+    parameters = LHS_RandomizedSearch(num_samples, params)
+    w = 0
+    h = num_workers // num_folds
+    kftrain, kftest = kfold_era(num_folds, eras)
+    test_indices = []
+    train_indices = []
+    x_s = []
+    y_s = []
+    x_t = []
+    y_t = []
+    e_t = []
+    for train_idx, test_idx in zip(kftrain, kftest):
+        # x_train, x_test = train_x[train_idx], train_x[test_idx]
+        y_train, y_test = train_y[train_idx], train_y[test_idx]
+        work_id = workers[np.arange(int(w % num_workers), int(h + w % num_workers))].tolist()
+        # x_s.append(client.scatter(x_train, workers=work_id, broadcast=True))
+        y_s.append(client.scatter(y_train, workers=work_id, broadcast=True))
+        # x_t.append(client.scatter(x_test, workers=work_id, broadcast=True))
+        y_t.append(client.scatter(y_test, workers=work_id, broadcast=True))
+        e_t.append(client.scatter(eras.iloc[test_idx], workers=work_id, broadcast=True))
+        w += h
+        test_indices.append(test_idx)
+        train_indices.append(train_idx)
+    print('Done Scattering')
+
+    def score(Y_True, Y_Pred, era):
+        """
+        Inputs: Y_True (array-like) True targets
+                Y_Pred (DataFrame) Predicted targets (should have an era column)
+        """
+        # Rank-correlation by era
+        Y_Pred = pd.DataFrame(Y_Pred, index=Y_True.index)
+        Y_Pred = Y_Pred.join(era).dropna()
+        ranked_pred = Y_Pred.groupby('era').apply(lambda x: x.rank(pct=True, method="first")).values[:, 0]
+        x = np.corrcoef(np.ravel(Y_True), ranked_pred)[0, 1]
+
+        return x
+
+    def fit_transform(reduction, x_train, x_test):
+        try:
+            redux = reduction.fit(x_train[:num_fit_rows])
+        except (ValueError, TypeError):
+            return
+
+        train_splits = len(x_train) // num_splits
+        for i in range(num_splits):
+            if i == 0:
+                train_x = redux.transform(x_train[:train_splits])
+            elif i < num_splits - 1:
+                train_x = np.append(train_x, redux.transform(x_train[train_splits * i:train_splits * (i + 1)]), axis=0)
+            else:
+
+                train_x = np.append(train_x, redux.transform(x_train[train_splits * i:]), axis=0)
+        test_x = redux.transform(x_test)
+        return train_x, test_x
+
+    def fit_predict(model, x_train, y_train, x_test, y_test, era):
+
+        model.fit(x_train,
+                  y_train)
+        pred = model.predict(x_test)
+        s = score(y_test, pred, era)
+        return s
+
+    best_score = -1e8
+    best_param = 0
+
+    counter = 0
+    log_eta = lambda x: np.log(x) / np.log(eta)
+    s_max = int(log_eta(max_ratio))
+    B = (s_max + 1) * max_ratio
+    for s in reversed(range(s_max + 1)):
+
+        # initial number of configurations
+        n = int(np.ceil(B / max_ratio / (s + 1) * eta ** s))
+
+        # initial number of iterations per config
+        r = max_ratio * eta ** (-s)
+
+        # n random configurations
+        if len(parameters) < n:
+            break
+        T = parameters[:n]
+        parameters = parameters[n:]
+        k = 0
+        for i in range((s + 1)):  # changed from s + 1
+
+            # Run each of the n configs for <iterations>
+            # and keep best (n_configs / eta) configurations
+
+            n_configs = n * eta ** (-i)
+            ratio = r * eta ** (i)
+
+            print("\n*** {} configurations x {:.1f} ratio".format(n_configs, ratio))
+
+            models = []
+            futures = []
+            for t in T:
+                rf = redux(**t)
+                for train_idx, test_idx in zip(kftrain, kftest):
+                    x_train, x_test = train_x[train_idx], train_x[test_idx]
+                    fut = client.submit(fit_transform, rf, x_train, x_test,
+                                        workers=workers[int(k % num_workers)].tolist())
+                    futures.append(fut)
+                    k += 1
+            k = 0
+            gathered = client.gather(futures, direct=True)
+            futures = []
+            drop = []
+            for g in range(len(gathered)):
+                if r is None:
+                    d_index = g // num_folds
+
+                    drop.append(d_index)
+                    futures.append(0)
+                    continue
+
+                x_s, x_t = gathered[g]
+                future = client.submit(fit_predict, model, x_s, y_s[g % num_folds], x_t, y_t[g % num_folds],
+                                       e_t[g % num_folds],
+                                       workers=workers[int(g % num_workers)].tolist())
+                futures.append(future)
+
+            timer(futures)
+            scores = np.array(client.gather(futures, direct=True))
+            drop_indices = np.array([])
+            for d in drop:
+                drop_indices = np.append(drop_indices, np.arange(int(d), int(d + num_folds), 1))
+            if len(drop_indices) != 0:
+                scores[drop_indices] = -1e8
+            scores = np.split(scores, len(scores) / num_folds)
+            results = np.mean(scores, axis=1)
+            param = T[np.argmax(results)]
+            curr_score = np.max(results)
+            # keeping track of the best result so far (for display only)
+            # could do it be checking results each time, but hey
+            if best_score < curr_score:
+                best_score = curr_score
+                best_param = param
+            print("\n{} | current score: {} | best score so far: {:.4f} (parameters {})\n".format(counter, curr_score,
                                                                                                   best_score,
                                                                                                   best_param))
 

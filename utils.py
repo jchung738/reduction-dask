@@ -168,4 +168,4 @@ def fit_transform_dask(redux, train_x, num_fit_rows, num_splits, client):
 
     new_train_x = client.gather(new_train_x, direct=True)
 
-    return new_train_x
+    return np.concatenate(new_train_x)

@@ -5,7 +5,7 @@ In order to setup the proper environment to run package, please install these de
   module load python
   conda create --name dask_environment --clone lazy-mpi4py
   source activate dask_environment
-  conda install dask distributed ipykernel numpy pandas scikit-learn scipy matplotlib ten
+  conda install dask distributed ipykernel numpy pandas scikit-learn scipy matplotlib
   pip install hdbscan
   pip install pynndescent
   pip install lhsmdu

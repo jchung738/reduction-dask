@@ -4,6 +4,7 @@ import lhsmdu
 from sklearn.model_selection import ParameterGrid
 import time
 
+
 # Submissions are scored by spearman correlation
 # These are functions used in different parallel functions and hypeparameter tuning.
 
@@ -85,9 +86,6 @@ def timer(futures):
     return
 
 
-
-
-
 def LHS_RandomizedSearch(num_samples, params):
     """
     Inputs: num_samples (int) The number of samples to be taken from the ParameterGrid
@@ -149,12 +147,11 @@ def fit_transform_dask(redux, train_x, num_fit_rows, num_splits, client):
     the dataset.
     """
     workers = np.array(list(client.get_worker_logs().keys()))
-
+    num_workers = len(workers)
     train_subset = train_x[:num_fit_rows]
     redux.fit(train_subset)
     train_splits = len(train_x) // num_splits
     new_train_x = []
-    num_workers = len(workers)
     for i in range(num_splits):
         if i == num_splits - 1:
             t_x = client.scatter(train_x[i * train_splits:], direct=True, workers=workers[i % num_workers])
@@ -164,7 +161,6 @@ def fit_transform_dask(redux, train_x, num_fit_rows, num_splits, client):
             t_x = client.scatter(train_x[i * train_splits:(i + 1) * train_splits], direct=True,
                                  workers=workers[i % num_workers])
             new_train_x.append(client.submit(redux.transform, t_x, workers=workers[i % num_workers]))
-
 
     new_train_x = client.gather(new_train_x, direct=True)
 

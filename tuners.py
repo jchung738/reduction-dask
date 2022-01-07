@@ -5,6 +5,8 @@ from utils import timer
 from utils import kfold_era
 from utils import LHS_RandomizedSearch
 from metrics import fit_predict
+import scipy.stats as st
+import psutil
 
 
 def tune_kfold_dask(model, train_x, train_y, eras, num_folds, params, num_samples, client):
@@ -508,7 +510,7 @@ def hyperband(model, train_x, train_y, eras, num_folds, params, samples, eta, ma
 
 
 def tune_reduction_hyperband(redux, model, train_x, train_y, eras, num_folds, params, num_samples, eta, max_ratio,
-                             num_fit_rows, num_splits, client):
+                             num_fit_rows, num_splits, client, memory_limit=90, low_memory=False):
     """
     Inputs: redux (sklearn object) A Dimensionality Reduction object from SKlearn
             model (sklearn Model Object) Any kind of sklearn model
@@ -525,7 +527,8 @@ def tune_reduction_hyperband(redux, model, train_x, train_y, eras, num_folds, pa
             num_splits (int) Number of times the data is split up to be transformed (smaller values lead to more
                              accurate transformations)
             client (Dask object) Used to submit jobs to the remote cluster
-
+            memory_limit (int) Percentage of total memory threshold to avoid OOM errors
+            low_memory (Boolean) Set to True if running into OOM issues
     Outputs: best_score (float) Spearman Rank Correlation of the top performing hyperparameter combination
              best_param (dict) Best performing hyperparameters
 
@@ -573,11 +576,14 @@ def tune_reduction_hyperband(redux, model, train_x, train_y, eras, num_folds, pa
 
         return x
 
-    def fit_transform(reduction, x_train, x_test):
+    def fit_transform(reduction, x_train, x_test, fit_rows):
+        if fit_rows < x_train.shape[1] * 2:
+            fit_rows = x_train.shape[1] * 2
         try:
-            redux = reduction.fit(x_train[:num_fit_rows])
+
+            redux = reduction.fit(x_train[:fit_rows])
         except (ValueError, TypeError):
-            return
+            return 'Error'
 
         train_splits = len(x_train) // num_splits
         for i in range(num_splits):
@@ -632,39 +638,104 @@ def tune_reduction_hyperband(redux, model, train_x, train_y, eras, num_folds, pa
 
             models = []
             futures = []
-            for t in T:
-                rf = redux(**t)
-                for train_idx, test_idx in zip(kftrain, kftest):
-                    x_train, x_test = train_x[train_idx], train_x[test_idx]
-                    fut = client.submit(fit_transform, rf, x_train, x_test,
-                                        workers=workers[int(k % num_workers)].tolist())
-                    futures.append(fut)
-                    k += 1
-            k = 0
-            gathered = client.gather(futures, direct=True)
-            futures = []
+            model_futures = []
             drop = []
+
+            j = 0
+            k = 0
+            gathered = []
+            fit_rows = int(num_fit_rows * (ratio / 100))
+            if low_memory == False:
+                for t in T:
+                    rf = redux(**t)
+                    for train_idx, test_idx in zip(kftrain, kftest):
+                        x_train = client.scatter(train_x[train_idx])
+                        x_test = client.scatter(train_x[test_idx])
+
+                        fut = client.submit(fit_transform, rf, x_train, x_test, fit_rows,
+                                            workers=workers[int(j % num_workers)].tolist())
+                        futures.append(fut)
+                        j += 1
+                gathered = client.gather(futures)
+            else:
+                for t in T:
+                    rf = redux(**t)
+
+                    for train_idx, test_idx in zip(kftrain, kftest):
+                        x_train = client.scatter(train_x[train_idx], workers=workers[int(j % num_workers)].tolist())
+                        x_test = client.scatter(train_x[test_idx], workers=workers[int(j % num_workers)].tolist())
+
+                        fut = client.submit(fit_transform, rf, x_train, x_test, fit_rows,
+                                            workers=workers[int(j % num_workers)].tolist())
+                        futures.append(fut)
+                        j += 1
+
+                        if j % num_workers == 0:
+                            gathered_chunk = client.gather(futures, direct=True)
+                            del futures
+                            futures = []
+                            gathered.extend(gathered_chunk)
+
+                            if psutil.virtual_memory().percent > memory_limit:
+                                print('Memory Usage %:', psutil.virtual_memory().percent)
+                                print('Submitting current transformed datasets as futures')
+                                for g in range(len(gathered)):
+                                    if gathered[g] == 'Error':
+                                        d_index = g // num_folds
+
+                                        drop.append(d_index)
+                                        model_futures.append(client.submit(lambda x: x, -1e8))
+                                        continue
+                                    elif np.isnan(np.sum(gathered[g][1])) or np.isnan(np.sum(gathered[g][0])):
+                                        d_index = g // num_folds
+
+                                        drop.append(d_index)
+                                        model_futures.append(client.submit(lambda x: x, -1e8))
+                                        continue
+                                    x_s, x_t = gathered[g]
+
+                                    x_s = client.scatter(x_s, workers=workers[int(g % num_workers)].tolist())
+                                    x_t = client.scatter(x_t, workers=workers[int(g % num_workers)].tolist())
+                                    future = client.submit(fit_predict, model, x_s, y_s[k % num_folds], x_t,
+                                                           y_t[k % num_folds], e_t[k % num_folds],
+                                                           workers=workers[int(g % num_workers)].tolist())
+                                    model_futures.append(future)
+                                    k += 1
+                                del gathered
+                                gathered = []
+
+                gathered.extend(client.gather(futures, direct=True))
+                del futures
             for g in range(len(gathered)):
-                if r is None:
+                if gathered[g] == 'Error':
                     d_index = g // num_folds
 
                     drop.append(d_index)
-                    futures.append(0)
+                    model_futures.append(client.submit(lambda x: x, -1e8))
                     continue
+                elif np.isnan(np.sum(gathered[g][1])) or np.isnan(np.sum(gathered[g][0])):
+                    d_index = g // num_folds
 
+                    drop.append(d_index)
+                    model_futures.append(client.submit(lambda x: x, -1e8))
+                    continue
                 x_s, x_t = gathered[g]
-                future = client.submit(fit_predict, model, x_s, y_s[g % num_folds], x_t, y_t[g % num_folds],
-                                       e_t[g % num_folds],
-                                       workers=workers[int(g % num_workers)].tolist())
-                futures.append(future)
 
-            timer(futures)
-            scores = np.array(client.gather(futures, direct=True))
+                x_s = client.scatter(x_s, workers=workers[int(g % num_workers)].tolist())
+                x_t = client.scatter(x_t, workers=workers[int(g % num_workers)].tolist())
+                future = client.submit(fit_predict, model, x_s, y_s[k % num_folds], x_t, y_t[k % num_folds],
+                                       e_t[k % num_folds],
+                                       workers=workers[int(g % num_workers)].tolist())
+                model_futures.append(future)
+                k += 1
+
+            timer(model_futures)
+            scores = np.array(client.gather(model_futures, direct=True))
             drop_indices = np.array([])
             for d in drop:
                 drop_indices = np.append(drop_indices, np.arange(int(d), int(d + num_folds), 1))
-            if len(drop_indices) != 0:
-                scores[drop_indices] = -1e8
+            # if len(drop_indices)!=0:
+            #     scores[drop_indices] = -1e8
             scores = np.split(scores, len(scores) / num_folds)
             results = np.mean(scores, axis=1)
             param = T[np.argmax(results)]
